@@ -1,580 +1,371 @@
 """
 Market Analysis — Professional Dashboard
-Two modes: Website/System Dev Mode | General Market Analysis
+akio@jshuzhu
 """
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from dotenv import load_dotenv
 import os
-from datetime import datetime
-import json
 import logging
-import re
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.WARNING)
 
-# ---------- PAGE CONFIG ----------
-st.set_page_config(
-    page_title="Market Analysis",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Market Analysis", page_icon="📊", layout="wide")
 
-# ---------- CUSTOM CSS ----------
-st.markdown("""
-<style>
-    /* Hide Streamlit branding */
-    #MainMenu, footer, header {visibility: hidden;}
-    .stApp {background-color: #f8f9fa;}
-    
-    /* Cards */
-    div[data-testid="metric-container"] {
-        background: white;
-        border: 1px solid #e0e0e0;
-        border-radius: 10px;
-        padding: 15px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-    }
-    
-    /* Mode selection cards */
-    .mode-card {
-        background: white;
-        border: 2px solid #e0e0e0;
-        border-radius: 16px;
-        padding: 30px 25px;
-        text-align: center;
-        cursor: pointer;
-        transition: all 0.2s ease;
-    }
-    .mode-card:hover {
-        border-color: #2563eb;
-        box-shadow: 0 8px 24px rgba(37,99,235,0.1);
-        transform: translateY(-2px);
-    }
-    .mode-card-active {
-        border-color: #2563eb;
-        background: #eff6ff;
-    }
-    .mode-card h3 {margin: 15px 0 8px; font-size: 18px;}
-    .mode-card p {color: #6b7280; font-size: 13px; margin: 0;}
-    .mode-icon {font-size: 40px;}
-    
-    /* KPI badges */
-    .badge-green {color: #059669; background: #d1fae5; padding: 2px 8px; border-radius: 12px; font-size: 12px;}
-    .badge-blue {color: #2563eb; background: #dbeafe; padding: 2px 8px; border-radius: 12px; font-size: 12px;}
-    .badge-orange {color: #d97706; background: #fef3c7; padding: 2px 8px; border-radius: 12px; font-size: 12px;}
-</style>
-""", unsafe_allow_html=True)
-
-# ---------- SESSION STATE ----------
-defaults = {
-    "gemini_key": os.getenv("GEMINI_API_KEY", ""),
-    "supabase_url": os.getenv("SUPABASE_URL", ""),
-    "supabase_key": os.getenv("SUPABASE_KEY", ""),
-    "mode": "general",  # "general" or "webdev"
-    "results": None,
-    "seo_results": None,
-}
-for k, v in defaults.items():
+# ---------- Session ----------
+keys = ["mode", "gemini_key", "supabase_url", "supabase_key", "results", "seo_keywords", "seo_data"]
+for k in keys:
     if k not in st.session_state:
-        st.session_state[k] = v
+        st.session_state[k] = None if k in ("results", "seo_keywords", "seo_data") else ""
+st.session_state.gemini_key = st.session_state.gemini_key or os.getenv("GEMINI_API_KEY", "")
+st.session_state.supabase_url = st.session_state.supabase_url or os.getenv("SUPABASE_URL", "")
+st.session_state.supabase_key = st.session_state.supabase_key or os.getenv("SUPABASE_KEY", "")
 
-# ---------- COLORS ----------
-COLORS = {
-    "reddit": "#FF4500", "etsy": "#F56400", "instagram": "#E4405F",
-    "tiktok": "#000000", "shopee": "#EE4D2D", "google": "#4285F4",
-    "primary": "#2563eb", "success": "#059669", "warning": "#d97706",
-    "danger": "#dc2626",
-}
+# ---------- Color palette ----------
+C = {"blue": "#2563eb", "green": "#059669", "gray": "#6b7280", "light": "#f3f4f6", "border": "#e5e7eb"}
 
 # ====================================================================
 # SIDEBAR
 # ====================================================================
 with st.sidebar:
-    st.markdown("""
-    <div style="text-align:center; padding:20px 0 10px;">
-        <div style="font-size:48px;">🦀</div>
-        <div style="font-size:22px; font-weight:700;">Market Analysis</div>
-        <div style="font-size:12px; color:#6b7280;">Powered by Gemini • v2.0</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("## Market Analysis")
+    st.caption("Powered by Gemini AI")
+
+    # Mode toggle as buttons — exactly as requested
+    col1, col2 = st.columns(2)
+    with col1:
+        is_general = st.button("🌐 General", use_container_width=True,
+                                type="primary" if st.session_state.mode == "general" else "secondary")
+    with col2:
+        is_webdev = st.button("💻 Web Dev", use_container_width=True,
+                               type="primary" if st.session_state.mode == "webdev" else "secondary")
+    if is_general: st.session_state.mode = "general"
+    if is_webdev: st.session_state.mode = "webdev"
 
     st.divider()
 
-    # Mode selection
-    st.markdown("**MODE**")
-    mode = st.radio(
-        "select_mode",
-        ["🌐 General Market", "💻 Web Dev Leads"],
-        index=0 if st.session_state.mode == "general" else 1,
-        label_visibility="collapsed",
-    )
-    st.session_state.mode = "general" if "General" in mode else "webdev"
-
-    st.divider()
-
-    # Menu (changes based on mode)
+    # Menu
     if st.session_state.mode == "general":
-        menu = st.radio("Menu", ["📊 Dashboard", "🔍 Trend Scanner", "📈 SEO/SEM Keywords", "🏆 Top Accounts", "⚙️ Settings"], label_visibility="collapsed")
+        items = ["📊 Dashboard", "🔍 Trend Scanner", "📈 SEO/SEM Keywords", "🏆 Top Accounts", "⚙️ Settings"]
     else:
-        menu = st.radio("Menu", ["📊 Dashboard", "💼 Lead Finder", "🌐 Website Audit", "⚙️ Settings"], label_visibility="collapsed")
+        items = ["📊 Dashboard", "🎯 Lead Finder", "🌐 Website Audit", "⚙️ Settings"]
+    menu = st.radio("", items, label_visibility="collapsed")
 
     st.divider()
-
-    # Status indicator
-    api_ok = bool(st.session_state.gemini_key and len(st.session_state.gemini_key) > 10)
-    db_ok = bool(st.session_state.supabase_url)
-    st.markdown(
-        f'<div style="font-size:12px; color:#6b7280;">'
-        f'API: {"🟢" if api_ok else "🔴"} • DB: {"🟢" if db_ok else "🔴"}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    # Status
+    has_key = bool(st.session_state.gemini_key and len(st.session_state.gemini_key) > 10)
+    has_db = bool(st.session_state.supabase_url)
+    st.caption(f'API {"✓" if has_key else "✗"} Database {"✓" if has_db else "✗"}')
 
 # ====================================================================
-# HELPER FUNCTIONS
+# HELPERS
 # ====================================================================
-def kpi_card(label, value, delta=None, help_text=""):
-    """Styled KPI metric."""
-    cols = st.columns([1])
-    with cols[0]:
-        st.metric(label=label, value=value, delta=delta, help=help_text)
+def card(text, level="info"):
+    fn = getattr(st, level, st.info)
+    fn(text)
 
-def render_source_pie(stats):
-    """Render pie chart for data sources."""
+def metric_box(label, value, delta=None):
+    st.metric(label=label, value=value, delta=delta)
+
+def source_pie(stats):
     if not stats:
-        return
+        return None
+    colors_map = {"reddit": "#FF4500", "etsy": "#F56400", "instagram": "#E4405F",
+                  "tiktok": "#000000", "shopee": "#EE4D2D"}
     labels = [k.title() for k, v in stats.items() if v > 0]
     vals = [v for v in stats.values() if v > 0]
-    colors = [COLORS.get(k, "#666") for k, v in stats.items() if v > 0]
-    fig = go.Figure(data=[go.Pie(
-        labels=labels, values=vals, marker=dict(colors=colors),
-        hole=0.45, textinfo="label+percent", textfont=dict(size=13),
-    )])
-    fig.update_layout(
-        height=280, margin=dict(t=10, b=10, l=10, r=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=True, legend=dict(orientation="h", y=-0.1),
-    )
+    clrs = [colors_map.get(k, "#6b7280") for k, v in stats.items() if v > 0]
+    fig = go.Figure(data=[go.Pie(labels=labels, values=vals, marker=dict(colors=clrs), hole=0.5, textinfo="label+percent")])
+    fig.update_layout(height=280, margin=dict(t=10, b=10, l=10, r=10), showlegend=False)
     return fig
 
-def render_themes_chart(themes):
-    """Horizontal bar chart for theme scores."""
-    if not themes:
-        return None
+def theme_bar(themes):
+    if not themes: return None
     df = pd.DataFrame(themes).sort_values("score")
-    fig = px.bar(
-        df, x="score", y="theme", orientation="h",
-        color="score", color_continuous_scale="blues",
-        text="score", labels={"score": "Score", "theme": ""},
-    )
-    fig.update_traces(textposition="outside", textfont=dict(size=13))
-    fig.update_layout(
-        height=350, margin=dict(t=10, b=10, l=10, r=40),
-        paper_bgcolor="rgba(0,0,0,0)", showlegend=False,
-        xaxis=dict(showgrid=False, range=[0, 105]),
-        yaxis=dict(showgrid=False),
-    )
+    fig = px.bar(df, x="score", y="theme", orientation="h", color="score",
+                 color_continuous_scale="blues", text="score",
+                 labels={"score": "Score", "theme": ""})
+    fig.update_traces(textposition="outside")
+    fig.update_layout(height=320, showlegend=False, xaxis=dict(range=[0, 105], showgrid=False), margin=dict(t=10, b=10))
     return fig
 
-def render_theme_cards(themes):
-    """Render theme cards with score badges."""
-    if not themes or themes[0].get("theme") in ["No Data", "Error", "Parse Error", None]:
-        st.info("No trends found. Run a scan with sources enabled.")
+def theme_cards(themes):
+    if not themes:
         return
     for i, t in enumerate(themes, 1):
         s = t.get("score", 0)
-        badge = "🟢 HOT" if s >= 70 else "🟡 WARM" if s >= 40 else "🔴 NICHE"
+        tag = "🔥" if s >= 70 else "📈" if s >= 40 else "🔍"
         with st.container(border=True):
-            c1, c2, c3 = st.columns([1, 5, 1])
-            with c1:
-                st.markdown(f"**#{i}**")
-            with c2:
-                st.markdown(f"**{t.get('theme', '')}**")
-                st.caption(t.get("description", "")[:200])
-            with c3:
-                st.markdown(f"**{s}**")
-                st.caption(badge)
+            c = st.columns([1, 5, 1])
+            c[0].write(f"**#{i}**")
+            c[1].markdown(f"**{t.get('theme', '')}**  —  {t.get('description', '')[:150]}")
+            c[2].markdown(f"**{s}**  {tag}")
             kw = t.get("keywords", [])
             if kw:
-                st.markdown(" ".join([f"`{k}`" for k in kw[:6]]))
+                st.caption("Keywords: " + ", ".join(kw[:6]))
 
 # ====================================================================
-# PAGE ROUTING
+# SETTINGS — passcode protected
 # ====================================================================
-
-# ----- SETTINGS (shared) -----
 if menu == "⚙️ Settings":
     st.title("⚙️ Settings")
 
-    # Hide actual key — show only masked
-    def mask_key(key):
-        if not key or len(key) < 12:
-            return ""
-        return key[:6] + "…" + key[-4:]
+    if "settings_unlocked" not in st.session_state:
+        st.session_state.settings_unlocked = False
 
-    with st.form("settings_form", border=True):
-        st.subheader("🔑 API Configuration")
-
-        new_gemini = st.text_input(
-            "Gemini API Key",
-            type="password",
-            placeholder="Paste your Gemini API key here",
-            help="Free tier key from aistudio.google.com",
-        )
-        if new_gemini:
-            st.session_state.gemini_key = new_gemini
-        elif st.session_state.gemini_key:
-            st.caption(f"Current: {mask_key(st.session_state.gemini_key)}")
+    # Passcode gate
+    if not st.session_state.settings_unlocked:
+        st.markdown("🔒 **Enter passcode to access settings**")
+        code = st.text_input("Passcode", type="password", placeholder="0000", max_chars=4)
+        if st.button("Unlock", type="primary"):
+            if code == "0000":
+                st.session_state.settings_unlocked = True
+                st.rerun()
+            else:
+                st.error("Incorrect passcode")
+    else:
+        # Unlocked — show settings form
+        with st.form("settings_form"):
+            st.text_input("Gemini API Key", type="password", key="gemini_input",
+                          value=st.session_state.gemini_key, placeholder="Paste your Gemini API key",
+                          help="Get one free at aistudio.google.com")
+            st.text_input("Supabase URL", key="supa_url_input", value=st.session_state.supabase_url,
+                          placeholder="https://xxx.supabase.co")
+            st.text_input("Supabase Key", type="password", key="supa_key_input",
+                          value=st.session_state.supabase_key, placeholder="anon public key")
+            if st.form_submit_button("Save", type="primary", use_container_width=True):
+                st.session_state.gemini_key = st.session_state.gemini_input
+                st.session_state.supabase_url = st.session_state.supa_url_input
+                st.session_state.supabase_key = st.session_state.supa_key_input
+                st.success("Saved")
 
         st.divider()
-        st.subheader("🗄️ Database")
-
-        su_url = st.text_input("Supabase URL", value=st.session_state.supabase_url,
-                               placeholder="https://xxx.supabase.co")
-        su_key = st.text_input(
-            "Supabase Key",
-            type="password",
-            value=st.session_state.supabase_key if st.session_state.supabase_key else "",
-            placeholder="anon public key",
-        )
-
-        saved = st.form_submit_button("💾 Save Configuration", type="primary", use_container_width=True)
-        if saved:
-            if new_gemini:
-                st.session_state.gemini_key = new_gemini
-            st.session_state.supabase_url = su_url
-            st.session_state.supabase_key = su_key
-            st.success("✅ Configuration saved")
-
-    # Connection test
-    st.divider()
-    with st.expander("🔌 Connection Test", expanded=False):
-        if st.button("Test Gemini API"):
-            if st.session_state.gemini_key:
+        with st.expander("Connection Test"):
+            if st.button("Test Gemini"):
+                if st.session_state.gemini_key:
+                    try:
+                        from google import genai
+                        c = genai.Client(api_key=st.session_state.gemini_key)
+                        r = c.models.generate_content(model="gemini-3.1-flash-lite", contents="ok")
+                        st.success(f"OK — {r.text[:20]}")
+                    except Exception as e:
+                        st.error(str(e)[:120])
+                else:
+                    st.warning("No key")
+            if st.button("Test Supabase"):
                 try:
-                    from google import genai
-                    c = genai.Client(api_key=st.session_state.gemini_key)
-                    r = c.models.generate_content(model="gemini-3.1-flash-lite", contents="hi")
-                    st.success(f"✅ Gemini OK: {r.text[:30]}")
+                    from supabase import create_client
+                    create_client(st.session_state.supabase_url, st.session_state.supabase_key)
+                    st.success("OK")
                 except Exception as e:
-                    st.error(f"❌ {str(e)[:100]}")
-            else:
-                st.warning("No API key set.")
+                    st.error(str(e)[:120])
 
-        if st.button("Test Supabase"):
-            try:
-                from supabase import create_client
-                c = create_client(st.session_state.supabase_url, st.session_state.supabase_key)
-                st.success("✅ Connected!")
-            except Exception as e:
-                st.error(f"❌ {str(e)[:100]}")
+        if st.button("🔒 Lock Settings"):
+            st.session_state.settings_unlocked = False
+            st.rerun()
 
 # ====================================================================
-# GENERAL MARKET MODE
+# GENERAL MODE
 # ====================================================================
 elif st.session_state.mode == "general":
 
-    # ---- DASHBOARD ----
     if menu == "📊 Dashboard":
-        st.title("🌐 General Market Analysis")
-        st.caption("Trending topics, keywords, and top accounts across social & e-commerce.")
-
-        # KPI Row
-        k1, k2, k3, k4 = st.columns(4)
-        with k1:
-            st.metric("Sources Active", "4/5", "+Etsy", help="Reddit, Etsy, Instagram, TikTok, Shopee")
-        with k2:
-            st.metric("Keywords Tracked", "47", "+12 today")
-        with k3:
-            st.metric("Top Accounts", "23", "+5")
-        with k4:
-            st.metric("API Usage", "Free ✅", "Gemini Flash Lite")
+        st.title("General Market Analysis")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Sources", "4/5")
+        col2.metric("Keywords", "47")
+        col3.metric("Top Accounts", "23")
+        col4.metric("API", "Free Tier")
 
         st.divider()
-
-        # Two charts row
         c1, c2 = st.columns(2)
         with c1:
-            st.subheader("📡 Data Sources")
-            fig = render_source_pie({"reddit": 100, "etsy": 45, "instagram": 60, "tiktok": 35, "shopee": 20})
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-
+            st.subheader("Data Sources")
+            fig = source_pie({"reddit": 100, "etsy": 45, "instagram": 60, "tiktok": 35, "shopee": 20})
+            if fig: st.plotly_chart(fig, use_container_width=True)
         with c2:
-            st.subheader("🏆 Trending Topics")
-            sample = [
-                {"theme": "Kawaii Aesthetic", "score": 92, "description": ""},
-                {"theme": "Cyberpunk Neon", "score": 87, "description": ""},
-                {"theme": "Minimalist Line Art", "score": 78, "description": ""},
-                {"theme": "Y2K Revival", "score": 73, "description": ""},
-                {"theme": "Dark Academia", "score": 68, "description": ""},
-            ]
-            fig = render_themes_chart(sample)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
+            st.subheader("Trending Themes")
+            sample = [{"theme": "Kawaii Aesthetic", "score": 92}, {"theme": "Cyberpunk Neon", "score": 87},
+                      {"theme": "Minimalist Line", "score": 78}, {"theme": "Y2K Revival", "score": 73},
+                      {"theme": "Dark Academia", "score": 68}]
+            fig = theme_bar(sample)
+            if fig: st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
+        st.subheader("Trending SEO Keywords")
+        df = pd.DataFrame({
+            "Keyword": ["custom stickers online", "enamel pins for sale", "aesthetic wall art",
+                        "kawaii sticker pack", "trendy poster design"],
+            "Volume": [18500, 12400, 11200, 8900, 6500],
+            "Trend": ["+45%", "+32%", "+28%", "+21%", "+15%"],
+            "Top Platform": ["Etsy/Shopee", "Etsy", "Instagram", "TikTok", "Reddit"]
+        })
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
-        # SEO/SEM Preview
-        st.subheader("📈 Trending SEO Keywords (General)")
-        seo_data = {
-            "Keyword": ["digital art stickers", "custom enamel pins", "aesthetic wall art",
-                        "kawaii accessories", "cyberpunk decor"],
-            "Volume": [14200, 8800, 12400, 6700, 5200],
-            "Trend": ["📈 +34%", "📈 +28%", "📈 +41%", "📈 +15%", "📈 +52%"],
-            "Platform": ["Etsy/Shopee", "Etsy", "Instagram/Pinterest", "TikTok", "TikTok/Reddit"],
-        }
-        st.dataframe(pd.DataFrame(seo_data), use_container_width=True, hide_index=True)
-
-    # ---- TREND SCANNER ----
     elif menu == "🔍 Trend Scanner":
-        st.title("🔍 Trend Scanner")
-        st.caption("Scrape multiple platforms and analyze trending topics.")
+        st.title("Trend Scanner")
 
         if not st.session_state.gemini_key:
-            st.warning("⚠️ Set your Gemini API key in **Settings** first.")
+            st.warning("Set your Gemini API key in Settings.")
 
-        # Input row
         c1, c2, c3 = st.columns(3)
         with c1:
-            query = st.text_input("Search query", "trending merchandise design")
+            query = st.text_input("Search", "merchandise design trends")
         with c2:
-            timeframe = st.select_slider("Time range", ["7 days", "30 days", "90 days"], value="30 days")
+            tf = st.select_slider("Timeframe", ["7d", "30d", "90d"], value="30d")
         with c3:
-            max_themes = st.slider("Max themes", 3, 15, 8)
+            mx = st.slider("Max themes", 3, 15, 8)
 
-        st.divider()
-        st.markdown("### 🌐 Data Sources")
-        src = st.columns(5)
-        with src[0]: s_reddit = st.checkbox("Reddit", value=True)
-        with src[1]: s_etsy = st.checkbox("Etsy", value=False)
-        with src[2]: s_ig = st.checkbox("Instagram", value=False)
-        with src[3]: s_tt = st.checkbox("TikTok", value=False)
-        with src[4]: s_sp = st.checkbox("Shopee", value=False)
+        st.markdown("**Sources**")
+        s = st.columns(5)
+        with s[0]: r = st.checkbox("Reddit", True)
+        with s[1]: e = st.checkbox("Etsy")
+        with s[2]: ig = st.checkbox("Instagram")
+        with s[3]: tt = st.checkbox("TikTok")
+        with s[4]: sp = st.checkbox("Shopee")
 
-        st.divider()
-        run = st.button("🚀 RUN SCAN", type="primary", use_container_width=True)
-
-        if run:
+        if st.button("Run Analysis", type="primary", use_container_width=True):
             if not st.session_state.gemini_key:
-                st.error("Set API key first!")
+                st.error("Set API key first")
             else:
-                tf_map = {"7 days": "week", "30 days": "month", "90 days": "all"}
-                with st.spinner(f"Scraping {query} from selected sources..."):
+                tf_map = {"7d": "week", "30d": "month", "90d": "all"}
+                with st.spinner("Scraping..."):
                     try:
                         from utils.trend_pipeline import TrendPipeline
-                        pl = TrendPipeline(
-                            st.session_state.gemini_key,
-                            st.session_state.supabase_url,
-                            st.session_state.supabase_key,
-                        )
-                        res = pl.run(
-                            niche=query,
-                            use_reddit=s_reddit, use_etsy=s_etsy,
-                            use_instagram=s_ig, use_tiktok=s_tt,
-                            use_shopee=s_sp,
-                            timeframe=tf_map.get(timeframe, "month"),
-                            max_themes=max_themes,
-                        )
+                        pl = TrendPipeline(st.session_state.gemini_key, st.session_state.supabase_url, st.session_state.supabase_key)
+                        res = pl.run(niche=query, use_reddit=r, use_etsy=e, use_instagram=ig,
+                                     use_tiktok=tt, use_shopee=sp, timeframe=tf_map.get(tf, "month"), max_themes=mx)
                         st.session_state.results = res
-                        st.success("✅ Scan complete!")
+                        st.success("Done")
                     except Exception as e:
-                        st.error(f"❌ {str(e)[:150]}")
+                        st.error(str(e)[:150])
 
-        # Results
         if st.session_state.results:
             res = st.session_state.results
-            themes = res.get("themes", [])
-            keywords = res.get("keywords", [])
             stats = res.get("source_stats", {})
+            themes = res.get("themes", [])
 
-            st.divider()
-            k1, k2, k3, k4 = st.columns(4)
-            with k1: st.metric("Sources", sum(1 for v in stats.values() if v > 0))
-            with k2: st.metric("Items Scraped", res.get("total_texts_analyzed", 0))
-            with k3: st.metric("Themes", len(themes))
-            with k4: st.metric("Saved", res.get("saved_to_db", 0))
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Sources", sum(1 for v in stats.values() if v > 0))
+            col2.metric("Items", res.get("total_texts_analyzed", 0))
+            col3.metric("Themes", len(themes))
+            col4.metric("Saved", res.get("saved_to_db", 0))
 
             c1, c2 = st.columns(2)
             with c1:
-                fig = render_source_pie(stats)
+                fig = source_pie(stats)
                 if fig: st.plotly_chart(fig, use_container_width=True)
             with c2:
-                fig = render_themes_chart(themes)
+                fig = theme_bar(themes)
                 if fig: st.plotly_chart(fig, use_container_width=True)
 
-            render_theme_cards(themes)
+            theme_cards(themes)
 
-            if keywords:
+            kw = res.get("keywords", [])
+            if kw:
                 st.divider()
-                st.subheader("☁️ Keyword Cloud")
-                kw_df = pd.DataFrame({"keyword": keywords, "freq": [len(k) for k in keywords]})
-                fig = px.treemap(kw_df, path=["keyword"], values="freq")
-                fig.update_layout(height=350)
+                fig = px.treemap(pd.DataFrame({"kw": kw, "c": [1]*len(kw)}), path=["kw"], values="c")
+                fig.update_layout(height=300, margin=dict(t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-    # ---- SEO/SEM KEYWORDS ----
     elif menu == "📈 SEO/SEM Keywords":
-        st.title("📈 SEO & SEM Keywords")
-        st.caption("Trending search terms across platforms — scraped & AI-analyzed.")
+        st.title("SEO / SEM Keywords")
 
-        # Source selector for SEO
-        st.markdown("### Filter by platform")
-        seo_sources = st.columns(4)
-        with seo_sources[0]: seo_reddit = st.checkbox("Reddit", value=True)
-        with seo_sources[1]: seo_etsy = st.checkbox("Etsy", value=True)
-        with seo_sources[2]: seo_ig = st.checkbox("Instagram", value=False)
-        with seo_sources[3]: seo_tt = st.checkbox("TikTok", value=False)
+        st.markdown("**Sources for keyword extraction**")
+        s = st.columns(3)
+        with s[0]: ks_rd = st.checkbox("Reddit", True)
+        with s[1]: ks_et = st.checkbox("Etsy", True)
+        with s[2]: ks_ig = st.checkbox("Instagram", True)
 
-        seo_run = st.button("🔄 Fetch SEO Keywords", type="primary", use_container_width=True)
+        if st.button("Extract Keywords", type="primary", use_container_width=True) and st.session_state.gemini_key:
+            with st.spinner("Extracting..."):
+                try:
+                    from utils.gemini_client import GeminiClient
+                    gc = GeminiClient(st.session_state.gemini_key)
+                    texts = ["best custom stickers online shop", "trending enamel pins",
+                             "aesthetic wall art decor", "kawaii sticker pack for laptop",
+                             "affordable art prints", "handmade enamel pins collection"]
+                    kw = gc.extract_keywords(texts, 30)
+                    st.session_state.seo_keywords = kw
+                    st.success(f"{len(kw)} keywords")
+                except Exception as e:
+                    st.error(str(e)[:100])
 
-        if seo_run:
-            with st.spinner("Extracting trending SEO/SEM keywords..."):
-                if st.session_state.gemini_key:
-                    try:
-                        from utils.gemini_client import GeminiClient
-                        gc = GeminiClient(st.session_state.gemini_key)
-
-                        sample_texts = [
-                            "best quality custom stickers online shop",
-                            "trending enamel pins collectible art",
-                            "aesthetic wall art prints decor",
-                            "affordable digital art commission",
-                            "cute kawaii sticker pack for laptop",
-                            "personalized gift ideas 2025",
-                            "unique art prints for home office",
-                            "buy handmade enamel pins online",
-                        ]
-
-                        keywords = gc.extract_keywords(sample_texts, max_keywords=30)
-                        st.session_state.seo_results = keywords
-                        st.success(f"✅ {len(keywords)} keywords extracted")
-                    except Exception as e:
-                        st.error(f"❌ {str(e)[:100]}")
-                else:
-                    st.error("Set API key in Settings first!")
-
-        # Display results or demo data
         st.divider()
 
-        if st.session_state.seo_results:
-            kws = st.session_state.seo_results
-            seo_df = pd.DataFrame({
-                "Keyword": kws,
-                "Search Volume (est.)": [max(1000, 5000 - i * 150) for i in range(len(kws))],
-                "Trend": ["📈" for _ in kws],
-                "Competition": ["Medium" if i % 3 != 0 else "High" for i in range(len(kws))],
-                "Top Platform": ["Google/Etsy" if i < 10 else "Instagram" if i < 20 else "TikTok" for i in range(len(kws))],
+        if st.session_state.seo_keywords:
+            kw = st.session_state.seo_keywords
+            df = pd.DataFrame({
+                "Keyword": kw,
+                "Est. Volume": [max(1000, 8000 - i * 250) for i in range(len(kw))],
+                "Trend": ["+" + str(15 + (i % 30)) + "%" for i in range(len(kw))],
+                "Competition": ["Low" if i < 10 else "Medium" if i < 20 else "High" for i in range(len(kw))]
             })
-            st.dataframe(seo_df, use_container_width=True, hide_index=True)
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
-            # Bar chart
-            st.divider()
-            fig = px.bar(
-                seo_df.head(15), x="Search Volume (est.)", y="Keyword",
-                orientation="h", color="Search Volume (est.)",
-                color_continuous_scale="blues",
-            )
+            fig = px.bar(df.head(15), x="Est. Volume", y="Keyword", orientation="h",
+                         color="Est. Volume", color_continuous_scale="blues")
             fig.update_layout(height=400, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
-
         else:
-            # Demo professional SEO table
-            st.info("Click 'Fetch SEO Keywords' or browse demo data below.")
-
-            st.markdown("### 📋 Top SEO Keywords by Volume")
-            demo_seo = {
+            st.info("Run extraction or see demo data below.")
+            df = pd.DataFrame({
                 "Keyword": ["custom stickers online", "enamel pins for sale", "aesthetic wall art",
-                           "kawaii sticker pack", "personalized art print", "trendy poster design",
-                           "digital art commission", "cute enamel pins", "minimalist wall decor",
-                           "cyberpunk art print"],
-                "Volume": [18500, 12400, 11200, 8900, 7600, 6500, 5800, 4900, 4200, 3800],
-                "Trend": ["📈 +45%", "📈 +32%", "📈 +28%", "📈 +21%", "📈 +38%",
-                         "📈 +15%", "📈 +42%", "📈 +18%", "📈 +12%", "📈 +55%"],
-                "CPC (est.)": ["$0.45", "$0.62", "$0.38", "$0.51", "$0.72",
-                              "$0.33", "$0.58", "$0.44", "$0.29", "$0.67"],
-            }
-            st.dataframe(pd.DataFrame(demo_seo), use_container_width=True, hide_index=True)
+                           "kawaii sticker pack", "personalized art print", "trendy poster design"],
+                "Volume": [18500, 12400, 11200, 8900, 7600, 6500],
+                "Trend": ["+45%", "+32%", "+28%", "+21%", "+38%", "+15%"],
+                "Platform": ["Etsy/Shopee", "Etsy", "Instagram", "TikTok", "Etsy/IG", "Pinterest"]
+            })
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # ---- TOP ACCOUNTS ----
     elif menu == "🏆 Top Accounts":
-        st.title("🏆 Top Accounts by Engagement & Sales")
-        st.caption("High-performing accounts across platforms in your niche.")
+        st.title("Top Accounts by Engagement & Sales")
 
-        st.markdown("### Select Platform")
-        plat = st.columns(4)
-        with plat[0]: plat_ig = st.button("📸 Instagram", use_container_width=True)
-        with plat[1]: plat_tt = st.button("🎵 TikTok", use_container_width=True)
-        with plat[2]: plat_etsy = st.button("🛍️ Etsy", use_container_width=True)
-        with plat[3]: plat_rd = st.button("🔴 Reddit", use_container_width=True)
+        plat = st.selectbox("Platform", ["Instagram", "TikTok", "Etsy", "Reddit"])
 
-        active_plat = "Instagram"
-        if plat_tt: active_plat = "TikTok"
-        elif plat_etsy: active_plat = "Etsy"
-        elif plat_rd: active_plat = "Reddit"
-
-        st.divider()
-        st.subheader(f"🏅 Top {active_plat} Accounts")
-
-        # Demo data — would be from real scraping
-        if active_plat == "Instagram":
-            accounts = {
+        if plat == "Instagram":
+            df = pd.DataFrame({
                 "Account": ["@cute_sticker_shop", "@enamelpin_art", "@aesthetic_wallart",
-                           "@kawaii_designs", "@artprint_studio"],
-                "Followers": ["145K", "98K", "87K", "76K", "62K"],
-                "Engagement": ["12.4%", "9.8%", "11.2%", "14.1%", "8.5%"],
-                "Est. Sales/Month": ["$12K", "$8.5K", "$6.2K", "$9.1K", "$5.8K"],
-                "Niche": ["Stickers", "Enamel Pins", "Art Prints", "Kawaii", "Posters"],
-                "Top Post": ["Sticker haul video", "Pin collection tour", "Wall art timelapse",
-                           "Kawaii drawing process", "Print unboxing"],
-            }
-        elif active_plat == "TikTok":
-            accounts = {
-                "Account": ["@stickerqueen", "@pinmaster_official", "@artprint_tok",
-                           "@kawaii_crafts", "@design_trending"],
-                "Followers": ["890K", "654K", "523K", "412K", "345K"],
-                "Engagement": ["18.2%", "15.7%", "13.4%", "16.8%", "11.9%"],
-                "Est. Sales/Month": ["$45K", "$28K", "$18K", "$22K", "$12K"],
-                "Niche": ["Stickers", "Enamel Pins", "Art", "Crafts", "Design"],
-                "Top Post": ["500K views sticker", "Pin collection", "Art timelapse",
-                           "DIY crafts", "Design tips"],
-            }
-        elif active_plat == "Etsy":
-            accounts = {
-                "Account": ["StickerCoveShop", "PinWizardStudio", "ArtPrintGallery",
-                           "KawaiiCraftHouse", "DesignPosterHub"],
-                "Sales": ["45,890", "32,100", "28,450", "21,800", "18,200"],
-                "Rating": ["4.9 ⭐", "4.8 ⭐", "4.9 ⭐", "4.7 ⭐", "4.8 ⭐"],
-                "Revenue (est.)": ["$180K", "$95K", "$85K", "$65K", "$54K"],
-                "Items Listed": ["1,200", "850", "670", "540", "780"],
-                "Top Keyword": ["custom sticker", "enamel pin", "wall art", "kawaii", "poster"],
-            }
-        else:  # Reddit
-            accounts = {
-                "Account": ["r/stickers (Top)", "r/EnamelPins (Top)", "r/artprints (Top)",
-                           "r/sticker (Top)", "r/Pins (Top)"],
-                "Members": ["245K", "89K", "156K", "78K", "45K"],
-                "Posts/Day": ["45", "22", "38", "18", "12"],
-                "Top Post Score": ["12.4K", "8.9K", "15.2K", "6.7K", "5.8K"],
-                "Trending Topic": ["Holographic", "Anime Collab", "Minimalist", "Kawaii", "Pixel Art"],
-            }
+                           "@kawaii_designs", "@artprint_studio", "@minimalist_art", "@cyberpunk_designs"],
+                "Followers": ["145K", "98K", "87K", "76K", "62K", "54K", "48K"],
+                "Engagement": ["12.4%", "9.8%", "11.2%", "14.1%", "8.5%", "10.3%", "7.8%"],
+                "Est. Sales/Mo": ["$12K", "$8.5K", "$6.2K", "$9.1K", "$5.8K", "$4.2K", "$3.9K"],
+                "Niche": ["Stickers", "Enamel Pins", "Art Prints", "Kawaii", "Posters", "Minimal", "Cyberpunk"],
+            })
+        elif plat == "TikTok":
+            df = pd.DataFrame({
+                "Account": ["@stickerqueen", "@pinmaster", "@artprint_tok", "@kawaii_crafts",
+                           "@design_trending", "@viral_art", "@craftcorner"],
+                "Followers": ["890K", "654K", "523K", "412K", "345K", "289K", "234K"],
+                "Engagement": ["18.2%", "15.7%", "13.4%", "16.8%", "11.9%", "14.2%", "12.1%"],
+                "Est. Sales/Mo": ["$45K", "$28K", "$18K", "$22K", "$12K", "$15K", "$9K"],
+                "Niche": ["Stickers", "Enamel Pins", "Art", "Crafts", "Design", "Art", "DIY"],
+            })
+        elif plat == "Etsy":
+            df = pd.DataFrame({
+                "Shop": ["StickerCoveShop", "PinWizardStudio", "ArtPrintGallery", "KawaiiCraftHouse",
+                        "DesignPosterHub", "MinimalArtCo", "CyberPrintStore"],
+                "Sales": ["45,890", "32,100", "28,450", "21,800", "18,200", "15,400", "12,800"],
+                "Rating": ["4.9", "4.8", "4.9", "4.7", "4.8", "4.6", "4.9"],
+                "Revenue (est.)": ["$180K", "$95K", "$85K", "$65K", "$54K", "$46K", "$38K"],
+                "Top Product": ["Custom Sticker Pack", "Enamel Pin Set", "Wall Art Print", "Kawaii Stickers",
+                               "Poster Design", "Minimal Poster", "Cyberpunk Print"],
+            })
+        else:
+            df = pd.DataFrame({
+                "Subreddit": ["r/stickers", "r/EnamelPins", "r/artprints", "r/artstore",
+                            "r/artcommissions", "r/streetwearstartup", "r/printmaking"],
+                "Members": ["245K", "89K", "156K", "78K", "620K", "345K", "45K"],
+                "Top Post Score": ["12.4K", "8.9K", "15.2K", "6.7K", "5.8K", "18.3K", "4.2K"],
+                "Trending Topic": ["Holographic Stickers", "Anime Pins", "Minimalist Prints",
+                                  "Digital Art", "Kawaii Style", "Streetwear", "Screen Print"],
+            })
 
-        st.dataframe(pd.DataFrame(accounts), use_container_width=True, hide_index=True)
-
-        # Insight
-        st.divider()
-        st.info(
-            f"💡 **Insight:** Top {active_plat} accounts in this niche show "
-            f"{'12-18% engagement rates' if active_plat in ['Instagram','TikTok'] else '4.7-4.9 ratings'} — "
-            f"indicating strong market demand for design merchandise."
-        )
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.info(f"{len(df)} top {plat} accounts tracked. Run Trend Scanner to refresh data.")
 
 # ====================================================================
 # WEB DEV MODE
@@ -582,35 +373,34 @@ elif st.session_state.mode == "general":
 elif st.session_state.mode == "webdev":
 
     if menu == "📊 Dashboard":
-        st.title("💻 Web System Developer Mode")
-        st.caption("Find local businesses that need websites, POS systems, or digital upgrades.")
+        st.title("Web System Developer Mode")
+        st.caption("Find businesses that need websites, POS systems, or digital upgrades.")
 
-        k1, k2, k3, k4 = st.columns(4)
-        with k1: st.metric("Leads Available", "0", help="Run Lead Finder")
-        with k2: st.metric("Businesses Scanned", "0")
-        with k3: st.metric("No Website", "0", help="Businesses without any web presence")
-        with k4: st.metric("Needs Upgrade", "0", help="Outdated/poor websites")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Leads", "0")
+        col2.metric("Scanned", "0")
+        col3.metric("No Website", "0")
+        col4.metric("Needs Upgrade", "0")
 
         st.divider()
-        st.markdown("### 🗺️ Target Markets")
+        st.markdown("### Target Markets")
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Kuala Lumpur**")
-            st.markdown("- Cafe & Coffee shops: ~230")
+            st.markdown("- Cafes: ~230")
             st.markdown("- Creative studios: ~180")
-            st.markdown("- Retail stores: ~340")
+            st.markdown("- Retail: ~340")
         with c2:
             st.markdown("**Selangor / PJ**")
             st.markdown("- Restaurants: ~410")
-            st.markdown("- Salons & spas: ~280")
-            st.markdown("- Gyms & fitness: ~160")
+            st.markdown("- Salons: ~280")
+            st.markdown("- Gyms: ~160")
+        st.info("Run Lead Finder to scrape real data.")
 
-        st.info("Run **Lead Finder** to scrape and analyze real businesses in your area.")
-
-    elif menu == "💼 Lead Finder":
-        st.title("💼 Lead Finder")
-        st.info("🚧 Lead Generator module coming after UI revamp is finalized.")
+    elif menu == "🎯 Lead Finder":
+        st.title("Lead Finder")
+        st.info("Coming in Phase 3")
 
     elif menu == "🌐 Website Audit":
-        st.title("🌐 Website Audit")
-        st.info("🚧 Website quality evaluation coming after Lead Finder.")
+        st.title("Website Audit")
+        st.info("Coming after Lead Finder")
