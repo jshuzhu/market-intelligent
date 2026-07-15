@@ -1,0 +1,10 @@
+streamlit>=1.40
+beautifulsoup4>=4.12
+requests>=2.31
+playwright>=1.40
+lxml>=5.0
+pandas>=2.0
+plotly>=5.18
+google-genai>=2.0
+python-dotenv>=1.0
+supabase>=2.0
