@@ -113,21 +113,40 @@ def theme_cards(themes):
 if menu == "⚙️ Settings":
     st.title("⚙️ Settings")
 
+    # Init session keys for settings lock
+    if "settings_password" not in st.session_state:
+        st.session_state.settings_password = None
     if "settings_unlocked" not in st.session_state:
         st.session_state.settings_unlocked = False
 
-    # Passcode gate
-    if not st.session_state.settings_unlocked:
-        st.markdown("🔒 **Enter passcode to access settings**")
-        code = st.text_input("Passcode", type="password", placeholder="0000", max_chars=4)
+    # --- First time: set password ---
+    if st.session_state.settings_password is None:
+        st.markdown("🔐 **Set a password to protect your settings.**")
+        new_pw = st.text_input("Create password", type="password", placeholder="Enter your password")
+        confirm_pw = st.text_input("Confirm password", type="password", placeholder="Re-enter password")
+        if st.button("Set Password", type="primary"):
+            if not new_pw:
+                st.error("Password cannot be empty")
+            elif new_pw != confirm_pw:
+                st.error("Passwords do not match")
+            else:
+                st.session_state.settings_password = new_pw
+                st.session_state.settings_unlocked = True
+                st.rerun()
+
+    # --- Locked: enter password ---
+    elif not st.session_state.settings_unlocked:
+        st.markdown("🔒 **Settings are locked.**")
+        code = st.text_input("Enter password", type="password", placeholder="")
         if st.button("Unlock", type="primary"):
-            if code == "0000":
+            if code == st.session_state.settings_password:
                 st.session_state.settings_unlocked = True
                 st.rerun()
             else:
-                st.error("Incorrect passcode")
+                st.error("Incorrect password")
+
+    # --- Unlocked: show settings form ---
     else:
-        # Unlocked — show settings form
         with st.form("settings_form"):
             st.text_input("Gemini API Key", type="password", key="gemini_input",
                           value=st.session_state.gemini_key, placeholder="Paste your Gemini API key",
@@ -163,9 +182,16 @@ if menu == "⚙️ Settings":
                 except Exception as e:
                     st.error(str(e)[:120])
 
-        if st.button("🔒 Lock Settings"):
-            st.session_state.settings_unlocked = False
-            st.rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔒 Lock", use_container_width=True):
+                st.session_state.settings_unlocked = False
+                st.rerun()
+        with col2:
+            if st.button("🔄 Change Password", use_container_width=True):
+                st.session_state.settings_password = None
+                st.session_state.settings_unlocked = False
+                st.rerun()
 
 # ====================================================================
 # GENERAL MODE
