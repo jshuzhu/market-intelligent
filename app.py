@@ -3,8 +3,15 @@ Market Intelligence & B2B Lead Scraper
 Streamlit Dashboard - Main Application
 """
 import streamlit as st
+import pandas as pd
+import plotly.express as px
 from dotenv import load_dotenv
 import os
+from datetime import datetime, timedelta
+import json
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 # ---------- Page Config ----------
 st.set_page_config(
@@ -84,6 +91,23 @@ if page == "🏠 Home":
         "Supabase credentials → then run a module!"
     )
 
+    # --- Recent Activity from DB ---
+    if st.session_state.supabase_url and st.session_state.supabase_key:
+        try:
+            from utils.supabase_client import Database
+            db = Database(st.session_state.supabase_url, st.session_state.supabase_key)
+
+            recent = db.get_trends(limit=5)
+            if recent:
+                st.markdown("### 📋 Recent Analyses")
+                for t in recent[:5]:
+                    st.markdown(
+                        f"- **{t['theme']}** ({t['niche']}) — Score: {t['score']} "
+                        f"— {t['created_at'][:10] if t.get('created_at') else ''}"
+                    )
+        except Exception:
+            pass
+
 # ================================================================
 # PAGE: TREND ANALYZER
 # ================================================================
@@ -134,23 +158,128 @@ elif page == "📈 Trend Analyzer":
     st.markdown("---")
     run_btn = st.button("🚀 Run Trend Analysis", type="primary", use_container_width=True)
 
+    # --- Timeframe mapping ---
+    tf_map = {"7 days": "week", "30 days": "month", "90 days": "all"}
+
+    # --- Run Button ---
+    st.markdown("---")
+    run_btn = st.button("🚀 Run Trend Analysis", type="primary", use_container_width=True)
+
     if run_btn:
         if not st.session_state.gemini_key:
             st.error("Set your Gemini API key in Settings first!")
         else:
-            with st.spinner("Scraping sources & analyzing trends..."):
-                # TODO: Phase 2 - Implement scraping + Gemini pipeline
-                st.info("Analysis engine coming in Phase 2 🛠️")
+            actual_niche = custom_niche if niche == "Other" else niche
+            with st.spinner("🕷️ Scraping Reddit & analyzing with Gemini..."):
+                try:
+                    from utils.trend_pipeline import TrendPipeline
 
-    # --- Results Placeholder ---
+                    pipeline = TrendPipeline(
+                        gemini_key=st.session_state.gemini_key,
+                        supabase_url=st.session_state.supabase_url,
+                        supabase_key=st.session_state.supabase_key
+                    )
+
+                    results = pipeline.run(
+                        niche=actual_niche,
+                        use_reddit=reddit,
+                        use_twitter=twitter,
+                        use_ecommerce=ecom,
+                        timeframe=tf_map.get(timeframe, "month"),
+                    )
+
+                    st.session_state["last_results"] = results
+                    st.session_state["last_niche"] = actual_niche
+                    st.session_state["results_time"] = datetime.now()
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Analysis failed: {e}")
+                    logging.exception("Trend analysis error")
+
+    # --- Results Display ---
     st.markdown("### 📊 Results")
-    result_tab1, result_tab2, result_tab3 = st.tabs(["Trending Themes", "Keyword Cloud", "Raw Data"])
+    result_tab1, result_tab2, result_tab3 = st.tabs([
+        "Trending Themes", "Keyword Cloud", "Raw Data"
+    ])
+
     with result_tab1:
-        st.info("Run analysis to see trending themes here.")
+        if "last_results" in st.session_state:
+            res = st.session_state["last_results"]
+            themes = res.get("themes", [])
+            stats = res.get("source_stats", {})
+
+            # Source stats
+            cols = st.columns(3)
+            with cols[0]:
+                st.metric("Reddit posts", stats.get("reddit", 0))
+            with cols[1]:
+                st.metric("Texts analyzed", res.get("total_texts_analyzed", 0))
+            with cols[2]:
+                st.metric("Saved to DB", res.get("saved_to_db", 0))
+
+            if themes and themes[0].get("theme") not in ["No data", "Error", "Parse Error"]:
+                # Build theme cards
+                for i, theme in enumerate(themes, 1):
+                    score = theme.get("score", 0)
+                    color = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
+
+                    with st.container(border=True):
+                        tcols = st.columns([1, 4, 1])
+                        with tcols[0]:
+                            st.markdown(f"### {color}")
+                        with tcols[1]:
+                            st.markdown(f"**{i}. {theme.get('theme', 'Unknown')}**")
+                            st.caption(theme.get("description", ""))
+                        with tcols[2]:
+                            st.markdown(f"## {score}")
+                            st.caption("/100")
+
+                        keywords = theme.get("keywords", [])
+                        if keywords:
+                            st.markdown(" ".join([
+                                f"`{k}`" for k in keywords
+                            ]))
+
+                # Bar chart
+                st.markdown("---")
+                st.subheader("📈 Trend Score Overview")
+                df = pd.DataFrame(themes)
+                if not df.empty and "score" in df.columns:
+                    df = df.sort_values("score", ascending=True)
+                    fig = px.bar(
+                        df, y="theme", x="score",
+                        orientation="h",
+                        color="score",
+                        color_continuous_scale="Viridis",
+                        labels={"theme": "", "score": "Trend Score"}
+                    )
+                    fig.update_layout(height=400, showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.warning("No trends found. Try a different niche or enable more sources.")
+        else:
+            st.info("Run analysis to see trending themes here.")
+
     with result_tab2:
-        st.info("Keyword visualization will appear here.")
+        if "last_results" in st.session_state:
+            kws = st.session_state["last_results"].get("keywords", [])
+            if kws:
+                kw_df = pd.DataFrame({"keyword": kws, "count": [len(k) for k in kws]})
+                fig = px.treemap(kw_df, path=["keyword"], values="count",
+                                  title="Trending Keywords")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No keywords extracted.")
+        else:
+            st.info("Keyword visualization will appear here.")
+
     with result_tab3:
-        st.info("Scraped data preview will appear here.")
+        if "last_results" in st.session_state:
+            st.json(st.session_state["last_results"])
+        else:
+            st.info("Scraped data preview will appear here.")
 
 # ================================================================
 # PAGE: LEAD GENERATOR
